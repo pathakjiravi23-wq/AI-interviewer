@@ -1,37 +1,47 @@
 import asyncio
 import json
-import os
 
-import websockets
-from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI
 
-load_dotenv()
-
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-
-if not DEEPGRAM_API_KEY:
-    raise ValueError("DEEPGRAM_API_KEY is not set")
+from deepgram import connect_to_deepgram
 
 
 app = FastAPI()
 
-app.mount(
-    "/static",
-    StaticFiles(directory="static"),
-    name="static",
-)
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
 
 
-DEEPGRAM_URL = "wss://agent.deepgram.com/v1/agent/converse"
+async def receive_from_deepgram(deepgram_ws):
+
+    async for message in deepgram_ws:
+
+        if isinstance(message, bytes):
+
+            print("Received audio from Deepgram")
+
+        else:
+
+            data = json.loads(message)
+
+            print("Received from Deepgram:")
+            print(data)
 
 
-async def connect_to_deepgram():
+@app.websocket("/deepgram")
+async def deepgram_connection():
 
-    deepgram_ws = await websockets.connect(
-        DEEPGRAM_URL,
-        additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
-    )
+    deepgram_ws = await connect_to_deepgram()
 
-    return deepgram_ws
+    print("Connected to Deepgram Agent")
+
+    try:
+
+        await receive_from_deepgram(deepgram_ws)
+
+    finally:
+
+        await deepgram_ws.close()
+        print("Deepgram connection closed")
