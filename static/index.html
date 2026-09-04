@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Deepgram Voice Agent</title>
+
+    <style>
+        body {
+            font-family: Arial;
+            max-width: 600px;
+            margin: 50px auto;
+        }
+
+        button {
+            padding: 15px 25px;
+            font-size: 18px;
+        }
+
+        #status {
+            margin: 20px 0;
+        }
+
+        #conversation {
+            border: 1px solid #ddd;
+            padding: 20px;
+            min-height: 200px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>AI Voice Assistant</h1>
+
+    <button id="start">
+        Start Conversation
+    </button>
+
+    <p id="status">Disconnected</p>
+
+    <div id="conversation"></div>
+
+
+    <script>
+
+        let socket;
+        let audioContext;
+        let processor;
+        let source;
+        let stream;
+
+        document.getElementById("start").onclick = startConversation;
+
+
+        async function startConversation() {
+
+            socket = new WebSocket(
+                `ws://${window.location.host}/ws`
+            );
+
+            socket.binaryType = "arraybuffer";
+
+
+            socket.onopen = async () => {
+
+                document.getElementById("status").innerText =
+                    "Connected to AI";
+
+                await startMicrophone();
+            };
+
+
+            socket.onmessage = async (event) => {
+
+                // Deepgram text/event
+                if (typeof event.data === "string") {
+
+                    const data = JSON.parse(event.data);
+
+                    console.log(data);
+
+                    if (data.type === "ConversationText") {
+
+                        displayMessage(
+                            data.role,
+                            data.content
+                        );
+                    }
+
+                }
+
+                // Deepgram audio
+                else {
+
+                    await playAudio(event.data);
+                }
+            };
+
+
+            socket.onclose = () => {
+
+                document.getElementById("status").innerText =
+                    "Disconnected";
+            };
+        }
+
+
+        async function startMicrophone() {
+
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: true
+            });
+
+
+            audioContext = new AudioContext({
+                sampleRate: 16000
+            });
+
+
+            source =
+                audioContext.createMediaStreamSource(stream);
+
+
+            processor =
+                audioContext.createScriptProcessor(
+                    4096,
+                    1,
+                    1
+                );
+
+
+            processor.onaudioprocess = (event) => {
+
+                if (
+                    socket &&
+                    socket.readyState === WebSocket.OPEN
+                ) {
+
+                    const input =
+                        event.inputBuffer.getChannelData(0);
+
+
+                    const pcm =
+                        convertToPCM(input);
+
+
+                    socket.send(pcm);
+                }
+            };
+
+
+            source.connect(processor);
+
+            processor.connect(
+                audioContext.destination
+            );
+        }
+
+
+        function convertToPCM(input) {
+
+            const buffer =
+                new ArrayBuffer(input.length * 2);
+
+            const view =
+                new DataView(buffer);
+
+
+            for (let i = 0; i < input.length; i++) {
+
+                let sample =
+                    Math.max(
+                        -1,
+                        Math.min(1, input[i])
+                    );
+
+
+                view.setInt16(
+                    i * 2,
+                    sample < 0
+                        ? sample * 0x8000
+                        : sample * 0x7FFF,
+                    true
+                );
+            }
+
+
+            return buffer;
+        }
+
+
+        function displayMessage(role, content) {
+
+            const div =
+                document.getElementById("conversation");
+
+
+            div.innerHTML += `
+        <p>
+            <strong>${role}:</strong>
+            ${content}
+        </p>
+    `;
+        }
+
+
+        let audioQueue = [];
+        let isPlaying = false;
+
+
+        async function playAudio(arrayBuffer) {
+
+            const pcm16 = new Int16Array(arrayBuffer);
+
+            const audioBuffer =
+                audioContext.createBuffer(
+                    1,
+                    pcm16.length,
+                    24000
+                );
+
+            const channel =
+                audioBuffer.getChannelData(0);
+
+            for (let i = 0; i < pcm16.length; i++) {
+                channel[i] = pcm16[i] / 32768;
+            }
+
+            audioQueue.push(audioBuffer);
+
+            if (!isPlaying) {
+                playNextAudio();
+            }
+        }
+
+
+        function playNextAudio() {
+
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                return;
+            }
+
+            isPlaying = true;
+
+            const buffer = audioQueue.shift();
+
+            const source =
+                audioContext.createBufferSource();
+
+            source.buffer = buffer;
+
+            source.connect(
+                audioContext.destination
+            );
+
+            source.onended = () => {
+                playNextAudio();
+            };
+
+            source.start();
+        }
+
+    </script>
+
+</body>
+
+</html>

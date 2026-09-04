@@ -1,37 +1,55 @@
 import asyncio
-import json
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 
 from deepgram import connect_to_deepgram
 
-
 app = FastAPI()
 
+app.mount(
+    "/static",
+    StaticFiles(directory="static"),
+    name="static",
+)
 
-@app.get("/")
-async def root():
-    return {"status": "ok"}
+
+async def browser_to_deepgram(
+    browser_ws: WebSocket,
+    deepgram_ws,
+):
+
+    while True:
+
+        data = await browser_ws.receive_bytes()
+
+        await deepgram_ws.send(data)
 
 
-async def receive_from_deepgram(deepgram_ws):
+async def deepgram_to_browser(
+    deepgram_ws,
+    browser_ws: WebSocket,
+):
 
     async for message in deepgram_ws:
 
         if isinstance(message, bytes):
 
-            print("Received audio from Deepgram")
+            # Audio from Deepgram
+            await browser_ws.send_bytes(message)
 
         else:
 
-            data = json.loads(message)
-
-            print("Received from Deepgram:")
-            print(data)
+            # Events/transcripts from Deepgram
+            await browser_ws.send_text(message)
 
 
-@app.websocket("/deepgram")
-async def deepgram_connection():
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+
+    await websocket.accept()
+
+    print("Browser connected")
 
     deepgram_ws = await connect_to_deepgram()
 
@@ -39,7 +57,14 @@ async def deepgram_connection():
 
     try:
 
-        await receive_from_deepgram(deepgram_ws)
+        await asyncio.gather(
+            browser_to_deepgram(websocket, deepgram_ws),
+            deepgram_to_browser(deepgram_ws, websocket),
+        )
+
+    except WebSocketDisconnect:
+
+        print("Browser disconnected")
 
     finally:
 
