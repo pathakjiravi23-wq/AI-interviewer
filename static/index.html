@@ -43,11 +43,11 @@
 
     <script>
 
-        let socket;
         let audioContext;
-        let processor;
-        let source;
-        let stream;
+        let nextPlayTime = 0;
+        let currentSources = [];
+
+        let isSpeaking = false;
 
         document.getElementById("start").onclick = startConversation;
 
@@ -66,18 +66,29 @@
                 document.getElementById("status").innerText =
                     "Connected to AI";
 
+                audioContext = new AudioContext({
+                    sampleRate: 24000
+                });
+
+                await audioContext.resume();
+
                 await startMicrophone();
             };
 
 
             socket.onmessage = async (event) => {
 
-                // Deepgram text/event
                 if (typeof event.data === "string") {
 
-                    const data = JSON.parse(event.data);
+                    const data =
+                        JSON.parse(event.data);
 
                     console.log(data);
+
+                    if (data.type === "UserStartedSpeaking") {
+
+                        stopAIPlayback();
+                    }
 
                     if (data.type === "ConversationText") {
 
@@ -87,12 +98,9 @@
                         );
                     }
 
-                }
+                } else {
 
-                // Deepgram audio
-                else {
-
-                    await playAudio(event.data);
+                    playAudio(event.data);
                 }
             };
 
@@ -208,7 +216,7 @@
         let isPlaying = false;
 
 
-        async function playAudio(arrayBuffer) {
+        function playAudio(arrayBuffer) {
 
             const pcm16 = new Int16Array(arrayBuffer);
 
@@ -226,13 +234,54 @@
                 channel[i] = pcm16[i] / 32768;
             }
 
-            audioQueue.push(audioBuffer);
+            const source =
+                audioContext.createBufferSource();
 
-            if (!isPlaying) {
-                playNextAudio();
+            source.buffer = audioBuffer;
+
+            source.connect(
+                audioContext.destination
+            );
+
+            /*
+             * Schedule this chunk immediately
+             * after the previous chunk.
+             */
+            const currentTime = audioContext.currentTime;
+
+            if (nextPlayTime < currentTime) {
+                nextPlayTime = currentTime;
             }
-        }
 
+            source.start(nextPlayTime);
+
+            nextPlayTime += audioBuffer.duration;
+
+            currentSources.push(source);
+
+            source.onended = () => {
+
+                currentSources =
+                    currentSources.filter(
+                        s => s !== source
+                    );
+            };
+        }
+        function stopAIPlayback() {
+
+            currentSources.forEach(
+                source => {
+                    try {
+                        source.stop();
+                    } catch (e) { }
+                }
+            );
+
+            currentSources = [];
+
+            nextPlayTime =
+                audioContext.currentTime;
+        }
 
         function playNextAudio() {
 
